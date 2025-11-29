@@ -1,7 +1,9 @@
 'use client';
 
 import { useState, useEffect, useCallback, memo } from 'react';
-import { Trash2, LogOut, UserPlus, MessageCircle, Send } from 'lucide-react';
+import { Trash2, LogOut, MessageCircle, Send } from 'lucide-react';
+import * as db from '@/lib/supabase/database';
+import * as auth from '@/lib/supabase/auth';
 
 interface User {
   id: string;
@@ -11,149 +13,130 @@ interface User {
 
 interface Task {
   id: number;
+  user_id: string;
   text: string;
   completed: boolean;
-  userId: string;
 }
 
 interface Comment {
   id: number;
-  taskId: number;
-  userId: string;
-  userName: string;
+  task_id: number;
+  user_id: string;
+  user_name: string;
   content: string;
-  createdAt: string;
+  created_at?: string;
 }
-
-// デフォルトユーザー
-const DEFAULT_USERS: User[] = [
-  { id: '1', name: '田中太郎', email: 'tanaka@example.com' },
-  { id: '2', name: '佐藤花子', email: 'sato@example.com' },
-  { id: '3', name: '山田次郎', email: 'yamada@example.com' },
-];
 
 export default function Home() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [users, setUsers] = useState<User[]>(DEFAULT_USERS);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [comments, setComments] = useState<Comment[]>([]);
   const [inputValue, setInputValue] = useState('');
-  const [nextId, setNextId] = useState(1);
-  const [nextCommentId, setNextCommentId] = useState(1);
   const [draggedTask, setDraggedTask] = useState<Task | null>(null);
   const [dragOverColumn, setDragOverColumn] = useState<'todo' | 'done' | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  // 新規登録フォーム用の状態
-  const [showRegisterForm, setShowRegisterForm] = useState(false);
-  const [registerName, setRegisterName] = useState('');
-  const [registerEmail, setRegisterEmail] = useState('');
-  const [selectedUserId, setSelectedUserId] = useState('');
+  // 認証フォーム用の状態
+  const [isSignUp, setIsSignUp] = useState(false);
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [authError, setAuthError] = useState('');
 
-  // ローカルストレージからデータを読み込む
+  // 認証状態の監視
   useEffect(() => {
-    const savedUsers = localStorage.getItem('users');
-    const savedTasks = localStorage.getItem('tasks');
-    const savedComments = localStorage.getItem('comments');
-    const savedCurrentUser = localStorage.getItem('currentUser');
-    const savedNextId = localStorage.getItem('nextId');
-    const savedNextCommentId = localStorage.getItem('nextCommentId');
+    const subscription = auth.onAuthStateChange(async (user) => {
+      if (user) {
+        const profile = await db.getCurrentUserProfile();
+        if (profile) {
+          setCurrentUser(profile);
+        }
+      } else {
+        setCurrentUser(null);
+        setTasks([]);
+        setComments([]);
+      }
+      setLoading(false);
+    });
 
-    if (savedUsers) {
-      setUsers(JSON.parse(savedUsers));
-    }
-
-    if (savedTasks) {
-      setTasks(JSON.parse(savedTasks));
-    }
-
-    if (savedComments) {
-      setComments(JSON.parse(savedComments));
-    }
-
-    if (savedCurrentUser) {
-      setCurrentUser(JSON.parse(savedCurrentUser));
-    }
-
-    if (savedNextId) {
-      setNextId(parseInt(savedNextId));
-    }
-
-    if (savedNextCommentId) {
-      setNextCommentId(parseInt(savedNextCommentId));
-    }
+    return () => {
+      subscription.unsubscribe();
+    };
   }, []);
 
-  // データの変更をローカルストレージに保存
-  useEffect(() => {
-    if (users.length > 0) {
-      localStorage.setItem('users', JSON.stringify(users));
-    }
-  }, [users]);
-
-  useEffect(() => {
-    localStorage.setItem('tasks', JSON.stringify(tasks));
-  }, [tasks]);
-
-  useEffect(() => {
-    localStorage.setItem('comments', JSON.stringify(comments));
-  }, [comments]);
-
+  // currentUserが変更されたら、そのユーザーのタスクとコメントを読み込む
   useEffect(() => {
     if (currentUser) {
-      localStorage.setItem('currentUser', JSON.stringify(currentUser));
-    } else {
-      localStorage.removeItem('currentUser');
+      loadUserData();
     }
   }, [currentUser]);
 
-  useEffect(() => {
-    localStorage.setItem('nextId', nextId.toString());
-  }, [nextId]);
+  const loadUserData = async () => {
+    setLoading(true);
+    const [userTasks, userComments] = await Promise.all([
+      db.getCurrentUserTasks(),
+      db.getCurrentUserComments()
+    ]);
+    setTasks(userTasks);
+    setComments(userComments);
+    setLoading(false);
+  };
 
-  useEffect(() => {
-    localStorage.setItem('nextCommentId', nextCommentId.toString());
-  }, [nextCommentId]);
+  // サインアップ処理
+  const handleSignUp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError('');
 
-  // ログイン処理
-  const handleLogin = () => {
-    const user = users.find(u => u.id === selectedUserId);
-    if (user) {
-      setCurrentUser(user);
+    if (!name.trim() || !email.trim() || !password.trim()) {
+      setAuthError('すべての項目を入力してください');
+      return;
+    }
+
+    const { user, error } = await auth.signUp(email, password, name);
+
+    if (error) {
+      setAuthError(error.message || 'サインアップに失敗しました');
+    } else if (user) {
+      // サインアップ成功
+      setName('');
+      setEmail('');
+      setPassword('');
+    }
+  };
+
+  // サインイン処理
+  const handleSignIn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError('');
+
+    if (!email.trim() || !password.trim()) {
+      setAuthError('メールアドレスとパスワードを入力してください');
+      return;
+    }
+
+    const { user, error } = await auth.signIn(email, password);
+
+    if (error) {
+      setAuthError('ログインに失敗しました。メールアドレスとパスワードを確認してください');
+    } else if (user) {
+      setEmail('');
+      setPassword('');
     }
   };
 
   // ログアウト処理
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    await auth.signOut();
     setCurrentUser(null);
-    setSelectedUserId('');
   };
 
-  // 新規登録処理
-  const handleRegister = () => {
-    if (registerName.trim() && registerEmail.trim()) {
-      const newUser: User = {
-        id: Date.now().toString(),
-        name: registerName.trim(),
-        email: registerEmail.trim(),
-      };
-      setUsers([...users, newUser]);
-      setCurrentUser(newUser);
-      setRegisterName('');
-      setRegisterEmail('');
-      setShowRegisterForm(false);
-    }
-  };
-
-  const handleAddTask = () => {
-    if (inputValue.trim() !== '' && currentUser) {
-      setTasks([...tasks, {
-        id: nextId,
-        text: inputValue.trim(),
-        completed: false,
-        userId: currentUser.id
-      }]);
-      setNextId(nextId + 1);
-      setInputValue('');
+  const handleAddTask = async () => {
+    if (inputValue.trim() !== '') {
+      const newTask = await db.createTask(inputValue.trim());
+      if (newTask) {
+        setTasks([newTask, ...tasks]);
+        setInputValue('');
+      }
     }
   };
 
@@ -163,37 +146,38 @@ export default function Home() {
     }
   };
 
-  const toggleTaskCompletion = useCallback((taskId: number) => {
-    setTasks(prevTasks => prevTasks.map(task =>
-      task.id === taskId ? { ...task, completed: !task.completed } : task
-    ));
+  const toggleTaskCompletion = useCallback(async (taskId: number, currentCompleted: boolean) => {
+    const updatedTask = await db.toggleTaskCompletion(taskId, currentCompleted);
+    if (updatedTask) {
+      setTasks(prevTasks => prevTasks.map(task =>
+        task.id === taskId ? updatedTask : task
+      ));
+    }
   }, []);
 
-  const handleDeleteTask = useCallback((taskId: number) => {
-    setTasks(prevTasks => prevTasks.filter(task => task.id !== taskId));
-    // タスクを削除したら、そのタスクのコメントも削除
-    setComments(prevComments => prevComments.filter(comment => comment.taskId !== taskId));
+  const handleDeleteTask = useCallback(async (taskId: number) => {
+    const success = await db.deleteTask(taskId);
+    if (success) {
+      setTasks(prevTasks => prevTasks.filter(task => task.id !== taskId));
+      setComments(prevComments => prevComments.filter(comment => comment.task_id !== taskId));
+    }
   }, []);
 
   // コメント追加処理
-  const handleAddComment = useCallback((taskId: number, commentText: string) => {
-    if (commentText.trim() && currentUser) {
-      setComments(prevComments => [...prevComments, {
-        id: Date.now(),
-        taskId: taskId,
-        userId: currentUser.id,
-        userName: currentUser.name,
-        content: commentText.trim(),
-        createdAt: new Date().toISOString(),
-      }]);
-      return true; // コメント追加成功
+  const handleAddComment = useCallback(async (taskId: number, commentText: string) => {
+    if (commentText.trim()) {
+      const newComment = await db.createComment(taskId, commentText.trim());
+      if (newComment) {
+        setComments(prevComments => [...prevComments, newComment]);
+        return true;
+      }
     }
-    return false; // コメント追加失敗
-  }, [currentUser]);
+    return false;
+  }, []);
 
   // 特定タスクのコメントを取得
   const getTaskComments = useCallback((taskId: number) => {
-    return comments.filter(comment => comment.taskId === taskId);
+    return comments.filter(comment => comment.task_id === taskId);
   }, [comments]);
 
   // ドラッグ＆ドロップ関連の関数
@@ -210,29 +194,30 @@ export default function Home() {
     setDragOverColumn(null);
   };
 
-  const handleDrop = (e: React.DragEvent, targetCompleted: boolean) => {
+  const handleDrop = async (e: React.DragEvent, targetCompleted: boolean) => {
     e.preventDefault();
     if (draggedTask && draggedTask.completed !== targetCompleted) {
-      setTasks(tasks.map(task =>
-        task.id === draggedTask.id ? { ...task, completed: targetCompleted } : task
-      ));
+      const updatedTask = await db.updateTask(draggedTask.id, { completed: targetCompleted });
+      if (updatedTask) {
+        setTasks(tasks.map(task =>
+          task.id === draggedTask.id ? updatedTask : task
+        ));
+      }
     }
     setDraggedTask(null);
     setDragOverColumn(null);
   };
 
-  // 現在のユーザーのタスクのみフィルター
-  const userTasks = currentUser ? tasks.filter(task => task.userId === currentUser.id) : [];
-  const todoTasks = userTasks.filter(task => !task.completed);
-  const doneTasks = userTasks.filter(task => task.completed);
+  const todoTasks = tasks.filter(task => !task.completed);
+  const doneTasks = tasks.filter(task => task.completed);
 
   // タスクカードのコンポーネント
   const TaskCard = memo(({ task }: { task: Task }) => {
     const [commentInput, setCommentInput] = useState('');
     const taskComments = getTaskComments(task.id);
 
-    const onAddComment = () => {
-      if (handleAddComment(task.id, commentInput)) {
+    const onAddComment = async () => {
+      if (await handleAddComment(task.id, commentInput)) {
         setCommentInput('');
       }
     };
@@ -255,7 +240,7 @@ export default function Home() {
             <input
               type="checkbox"
               checked={task.completed}
-              onChange={() => toggleTaskCompletion(task.id)}
+              onChange={() => toggleTaskCompletion(task.id, task.completed)}
               className="w-5 h-5 mt-0.5 text-indigo-600 rounded focus:ring-2 focus:ring-indigo-500 cursor-pointer"
             />
             <span className={`flex-1 break-words ${task.completed ? 'line-through text-gray-500' : 'text-gray-800'}`}>
@@ -286,7 +271,7 @@ export default function Home() {
                 {taskComments.map((comment) => (
                   <div key={comment.id} className="bg-white rounded p-2 text-sm">
                     <div className="font-semibold text-indigo-600 text-xs mb-1">
-                      {comment.userName}
+                      {comment.user_name}
                     </div>
                     <div className="text-gray-700">{comment.content}</div>
                   </div>
@@ -323,8 +308,8 @@ export default function Home() {
     const [commentInput, setCommentInput] = useState('');
     const taskComments = getTaskComments(task.id);
 
-    const onAddComment = () => {
-      if (handleAddComment(task.id, commentInput)) {
+    const onAddComment = async () => {
+      if (await handleAddComment(task.id, commentInput)) {
         setCommentInput('');
       }
     };
@@ -347,7 +332,7 @@ export default function Home() {
             <input
               type="checkbox"
               checked={task.completed}
-              onChange={() => toggleTaskCompletion(task.id)}
+              onChange={() => toggleTaskCompletion(task.id, task.completed)}
               className="w-5 h-5 mt-0.5 text-green-600 rounded focus:ring-2 focus:ring-green-500 cursor-pointer"
             />
             <span className="flex-1 text-gray-500 line-through break-words">
@@ -378,7 +363,7 @@ export default function Home() {
                 {taskComments.map((comment) => (
                   <div key={comment.id} className="bg-white rounded p-2 text-sm">
                     <div className="font-semibold text-green-600 text-xs mb-1">
-                      {comment.userName}
+                      {comment.user_name}
                     </div>
                     <div className="text-gray-700">{comment.content}</div>
                   </div>
@@ -410,6 +395,18 @@ export default function Home() {
     );
   });
 
+  // ローディング画面
+  if (loading) {
+    return (
+      <main className="min-h-screen bg-gradient-to-br from-indigo-100 via-purple-50 to-pink-100 flex items-center justify-center">
+        <div className="text-center">
+          <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mb-4"></div>
+          <p className="text-gray-600">読み込み中...</p>
+        </div>
+      </main>
+    );
+  }
+
   // ログイン前の画面
   if (!currentUser) {
     return (
@@ -423,31 +420,44 @@ export default function Home() {
               <p className="text-gray-600">タスク管理アプリ</p>
             </div>
 
-            {!showRegisterForm ? (
+            {!isSignUp ? (
               // ログインフォーム
-              <div className="space-y-6">
+              <form onSubmit={handleSignIn} className="space-y-6">
+                {authError && (
+                  <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
+                    {authError}
+                  </div>
+                )}
+
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-2">
-                    ユーザーを選択
+                    メールアドレス
                   </label>
-                  <select
-                    value={selectedUserId}
-                    onChange={(e) => setSelectedUserId(e.target.value)}
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="例: tanaka@example.com"
                     className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-                  >
-                    <option value="">ユーザーを選択してください</option>
-                    {users.map(user => (
-                      <option key={user.id} value={user.id}>
-                        {user.name}
-                      </option>
-                    ))}
-                  </select>
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    パスワード
+                  </label>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="パスワードを入力"
+                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                  />
                 </div>
 
                 <button
-                  onClick={handleLogin}
-                  disabled={!selectedUserId}
-                  className="w-full px-6 py-3 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-all duration-200 shadow-md hover:shadow-lg"
+                  type="submit"
+                  className="w-full px-6 py-3 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition-all duration-200 shadow-md hover:shadow-lg"
                 >
                   ログイン
                 </button>
@@ -462,24 +472,33 @@ export default function Home() {
                 </div>
 
                 <button
-                  onClick={() => setShowRegisterForm(true)}
-                  className="w-full px-6 py-3 border-2 border-indigo-600 text-indigo-600 font-semibold rounded-lg hover:bg-indigo-50 transition-all duration-200 flex items-center justify-center gap-2"
+                  type="button"
+                  onClick={() => {
+                    setIsSignUp(true);
+                    setAuthError('');
+                  }}
+                  className="w-full px-6 py-3 border-2 border-indigo-600 text-indigo-600 font-semibold rounded-lg hover:bg-indigo-50 transition-all duration-200"
                 >
-                  <UserPlus size={20} />
                   新規登録
                 </button>
-              </div>
+              </form>
             ) : (
               // 新規登録フォーム
-              <div className="space-y-6">
+              <form onSubmit={handleSignUp} className="space-y-6">
+                {authError && (
+                  <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
+                    {authError}
+                  </div>
+                )}
+
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-2">
                     名前
                   </label>
                   <input
                     type="text"
-                    value={registerName}
-                    onChange={(e) => setRegisterName(e.target.value)}
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
                     placeholder="例: 田中太郎"
                     className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
                   />
@@ -491,32 +510,47 @@ export default function Home() {
                   </label>
                   <input
                     type="email"
-                    value={registerEmail}
-                    onChange={(e) => setRegisterEmail(e.target.value)}
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
                     placeholder="例: tanaka@example.com"
                     className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
                   />
                 </div>
 
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    パスワード（6文字以上）
+                  </label>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="パスワードを入力"
+                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                  />
+                </div>
+
                 <button
-                  onClick={handleRegister}
-                  disabled={!registerName.trim() || !registerEmail.trim()}
-                  className="w-full px-6 py-3 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-all duration-200 shadow-md hover:shadow-lg"
+                  type="submit"
+                  className="w-full px-6 py-3 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition-all duration-200 shadow-md hover:shadow-lg"
                 >
                   登録してログイン
                 </button>
 
                 <button
+                  type="button"
                   onClick={() => {
-                    setShowRegisterForm(false);
-                    setRegisterName('');
-                    setRegisterEmail('');
+                    setIsSignUp(false);
+                    setName('');
+                    setEmail('');
+                    setPassword('');
+                    setAuthError('');
                   }}
                   className="w-full px-6 py-3 border-2 border-gray-300 text-gray-700 font-semibold rounded-lg hover:bg-gray-50 transition-all duration-200"
                 >
                   キャンセル
                 </button>
-              </div>
+              </form>
             )}
           </div>
         </div>
