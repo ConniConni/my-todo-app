@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { Trash2, LogOut, UserPlus } from 'lucide-react';
+import { useState, useEffect, useCallback, memo } from 'react';
+import { Trash2, LogOut, UserPlus, MessageCircle, Send } from 'lucide-react';
 
 interface User {
   id: string;
@@ -16,6 +16,15 @@ interface Task {
   userId: string;
 }
 
+interface Comment {
+  id: number;
+  taskId: number;
+  userId: string;
+  userName: string;
+  content: string;
+  createdAt: string;
+}
+
 // デフォルトユーザー
 const DEFAULT_USERS: User[] = [
   { id: '1', name: '田中太郎', email: 'tanaka@example.com' },
@@ -27,8 +36,10 @@ export default function Home() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [users, setUsers] = useState<User[]>(DEFAULT_USERS);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [comments, setComments] = useState<Comment[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [nextId, setNextId] = useState(1);
+  const [nextCommentId, setNextCommentId] = useState(1);
   const [draggedTask, setDraggedTask] = useState<Task | null>(null);
   const [dragOverColumn, setDragOverColumn] = useState<'todo' | 'done' | null>(null);
 
@@ -42,8 +53,10 @@ export default function Home() {
   useEffect(() => {
     const savedUsers = localStorage.getItem('users');
     const savedTasks = localStorage.getItem('tasks');
+    const savedComments = localStorage.getItem('comments');
     const savedCurrentUser = localStorage.getItem('currentUser');
     const savedNextId = localStorage.getItem('nextId');
+    const savedNextCommentId = localStorage.getItem('nextCommentId');
 
     if (savedUsers) {
       setUsers(JSON.parse(savedUsers));
@@ -53,12 +66,20 @@ export default function Home() {
       setTasks(JSON.parse(savedTasks));
     }
 
+    if (savedComments) {
+      setComments(JSON.parse(savedComments));
+    }
+
     if (savedCurrentUser) {
       setCurrentUser(JSON.parse(savedCurrentUser));
     }
 
     if (savedNextId) {
       setNextId(parseInt(savedNextId));
+    }
+
+    if (savedNextCommentId) {
+      setNextCommentId(parseInt(savedNextCommentId));
     }
   }, []);
 
@@ -74,6 +95,10 @@ export default function Home() {
   }, [tasks]);
 
   useEffect(() => {
+    localStorage.setItem('comments', JSON.stringify(comments));
+  }, [comments]);
+
+  useEffect(() => {
     if (currentUser) {
       localStorage.setItem('currentUser', JSON.stringify(currentUser));
     } else {
@@ -84,6 +109,10 @@ export default function Home() {
   useEffect(() => {
     localStorage.setItem('nextId', nextId.toString());
   }, [nextId]);
+
+  useEffect(() => {
+    localStorage.setItem('nextCommentId', nextCommentId.toString());
+  }, [nextCommentId]);
 
   // ログイン処理
   const handleLogin = () => {
@@ -134,15 +163,38 @@ export default function Home() {
     }
   };
 
-  const toggleTaskCompletion = (taskId: number) => {
-    setTasks(tasks.map(task =>
+  const toggleTaskCompletion = useCallback((taskId: number) => {
+    setTasks(prevTasks => prevTasks.map(task =>
       task.id === taskId ? { ...task, completed: !task.completed } : task
     ));
-  };
+  }, []);
 
-  const handleDeleteTask = (taskId: number) => {
-    setTasks(tasks.filter(task => task.id !== taskId));
-  };
+  const handleDeleteTask = useCallback((taskId: number) => {
+    setTasks(prevTasks => prevTasks.filter(task => task.id !== taskId));
+    // タスクを削除したら、そのタスクのコメントも削除
+    setComments(prevComments => prevComments.filter(comment => comment.taskId !== taskId));
+  }, []);
+
+  // コメント追加処理
+  const handleAddComment = useCallback((taskId: number, commentText: string) => {
+    if (commentText.trim() && currentUser) {
+      setComments(prevComments => [...prevComments, {
+        id: Date.now(),
+        taskId: taskId,
+        userId: currentUser.id,
+        userName: currentUser.name,
+        content: commentText.trim(),
+        createdAt: new Date().toISOString(),
+      }]);
+      return true; // コメント追加成功
+    }
+    return false; // コメント追加失敗
+  }, [currentUser]);
+
+  // 特定タスクのコメントを取得
+  const getTaskComments = useCallback((taskId: number) => {
+    return comments.filter(comment => comment.taskId === taskId);
+  }, [comments]);
 
   // ドラッグ＆ドロップ関連の関数
   const handleDragStart = (task: Task) => {
@@ -173,6 +225,190 @@ export default function Home() {
   const userTasks = currentUser ? tasks.filter(task => task.userId === currentUser.id) : [];
   const todoTasks = userTasks.filter(task => !task.completed);
   const doneTasks = userTasks.filter(task => task.completed);
+
+  // タスクカードのコンポーネント
+  const TaskCard = memo(({ task }: { task: Task }) => {
+    const [commentInput, setCommentInput] = useState('');
+    const taskComments = getTaskComments(task.id);
+
+    const onAddComment = () => {
+      if (handleAddComment(task.id, commentInput)) {
+        setCommentInput('');
+      }
+    };
+
+    const onKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === 'Enter') {
+        onAddComment();
+      }
+    };
+
+    return (
+      <div
+        draggable
+        onDragStart={() => handleDragStart(task)}
+        className="bg-gradient-to-r from-white to-indigo-50 border-2 border-indigo-200 rounded-lg shadow-sm hover:shadow-md transition-all duration-200 cursor-move group overflow-hidden"
+      >
+        {/* タスク本体 */}
+        <div className="p-4">
+          <div className="flex items-start gap-3">
+            <input
+              type="checkbox"
+              checked={task.completed}
+              onChange={() => toggleTaskCompletion(task.id)}
+              className="w-5 h-5 mt-0.5 text-indigo-600 rounded focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+            />
+            <span className={`flex-1 break-words ${task.completed ? 'line-through text-gray-500' : 'text-gray-800'}`}>
+              {task.text}
+            </span>
+            <button
+              onClick={() => handleDeleteTask(task.id)}
+              className="text-red-400 hover:text-red-600 hover:bg-red-50 p-2 rounded-lg transition-all duration-150 opacity-0 group-hover:opacity-100"
+              aria-label="タスクを削除"
+            >
+              <Trash2 size={18} />
+            </button>
+          </div>
+        </div>
+
+        {/* コメントセクション */}
+        <div className="bg-gray-50 border-t border-gray-200 p-3">
+          {/* コメント一覧 */}
+          <div className="mb-3">
+            <div className="flex items-center gap-1 text-sm font-semibold text-gray-600 mb-2">
+              <MessageCircle size={16} />
+              <span>コメント ({taskComments.length})</span>
+            </div>
+            {taskComments.length === 0 ? (
+              <p className="text-xs text-gray-400 italic">コメントはありません</p>
+            ) : (
+              <div className="space-y-2 max-h-40 overflow-y-auto">
+                {taskComments.map((comment) => (
+                  <div key={comment.id} className="bg-white rounded p-2 text-sm">
+                    <div className="font-semibold text-indigo-600 text-xs mb-1">
+                      {comment.userName}
+                    </div>
+                    <div className="text-gray-700">{comment.content}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* コメント入力欄 */}
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={commentInput}
+              onChange={(e) => setCommentInput(e.target.value)}
+              onKeyPress={onKeyPress}
+              placeholder="コメントを追加..."
+              className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent"
+              onClick={(e) => e.stopPropagation()}
+            />
+            <button
+              onClick={onAddComment}
+              className="px-3 py-2 bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 transition-colors duration-200 flex items-center gap-1"
+            >
+              <Send size={16} />
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  });
+
+  // 完了済みタスクカードのコンポーネント
+  const DoneTaskCard = memo(({ task }: { task: Task }) => {
+    const [commentInput, setCommentInput] = useState('');
+    const taskComments = getTaskComments(task.id);
+
+    const onAddComment = () => {
+      if (handleAddComment(task.id, commentInput)) {
+        setCommentInput('');
+      }
+    };
+
+    const onKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === 'Enter') {
+        onAddComment();
+      }
+    };
+
+    return (
+      <div
+        draggable
+        onDragStart={() => handleDragStart(task)}
+        className="bg-gradient-to-r from-white to-green-50 border-2 border-green-200 rounded-lg shadow-sm hover:shadow-md transition-all duration-200 cursor-move group overflow-hidden"
+      >
+        {/* タスク本体 */}
+        <div className="p-4">
+          <div className="flex items-start gap-3">
+            <input
+              type="checkbox"
+              checked={task.completed}
+              onChange={() => toggleTaskCompletion(task.id)}
+              className="w-5 h-5 mt-0.5 text-green-600 rounded focus:ring-2 focus:ring-green-500 cursor-pointer"
+            />
+            <span className="flex-1 text-gray-500 line-through break-words">
+              {task.text}
+            </span>
+            <button
+              onClick={() => handleDeleteTask(task.id)}
+              className="text-red-400 hover:text-red-600 hover:bg-red-50 p-2 rounded-lg transition-all duration-150 opacity-0 group-hover:opacity-100"
+              aria-label="タスクを削除"
+            >
+              <Trash2 size={18} />
+            </button>
+          </div>
+        </div>
+
+        {/* コメントセクション */}
+        <div className="bg-gray-50 border-t border-gray-200 p-3">
+          {/* コメント一覧 */}
+          <div className="mb-3">
+            <div className="flex items-center gap-1 text-sm font-semibold text-gray-600 mb-2">
+              <MessageCircle size={16} />
+              <span>コメント ({taskComments.length})</span>
+            </div>
+            {taskComments.length === 0 ? (
+              <p className="text-xs text-gray-400 italic">コメントはありません</p>
+            ) : (
+              <div className="space-y-2 max-h-40 overflow-y-auto">
+                {taskComments.map((comment) => (
+                  <div key={comment.id} className="bg-white rounded p-2 text-sm">
+                    <div className="font-semibold text-green-600 text-xs mb-1">
+                      {comment.userName}
+                    </div>
+                    <div className="text-gray-700">{comment.content}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* コメント入力欄 */}
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={commentInput}
+              onChange={(e) => setCommentInput(e.target.value)}
+              onKeyPress={onKeyPress}
+              placeholder="コメントを追加..."
+              className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-transparent"
+              onClick={(e) => e.stopPropagation()}
+            />
+            <button
+              onClick={onAddComment}
+              className="px-3 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors duration-200 flex items-center gap-1"
+            >
+              <Send size={16} />
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  });
 
   // ログイン前の画面
   if (!currentUser) {
@@ -360,31 +596,7 @@ export default function Home() {
               ) : (
                 <div className="space-y-3">
                   {todoTasks.map((task) => (
-                    <div
-                      key={task.id}
-                      draggable
-                      onDragStart={() => handleDragStart(task)}
-                      className="bg-gradient-to-r from-white to-indigo-50 border-2 border-indigo-200 rounded-lg p-4 shadow-sm hover:shadow-md transition-all duration-200 cursor-move group"
-                    >
-                      <div className="flex items-start gap-3">
-                        <input
-                          type="checkbox"
-                          checked={task.completed}
-                          onChange={() => toggleTaskCompletion(task.id)}
-                          className="w-5 h-5 mt-0.5 text-indigo-600 rounded focus:ring-2 focus:ring-indigo-500 cursor-pointer"
-                        />
-                        <span className="flex-1 text-gray-800 break-words">
-                          {task.text}
-                        </span>
-                        <button
-                          onClick={() => handleDeleteTask(task.id)}
-                          className="text-red-400 hover:text-red-600 hover:bg-red-50 p-2 rounded-lg transition-all duration-150 opacity-0 group-hover:opacity-100"
-                          aria-label="タスクを削除"
-                        >
-                          <Trash2 size={18} />
-                        </button>
-                      </div>
-                    </div>
+                    <TaskCard key={task.id} task={task} />
                   ))}
                 </div>
               )}
@@ -417,31 +629,7 @@ export default function Home() {
               ) : (
                 <div className="space-y-3">
                   {doneTasks.map((task) => (
-                    <div
-                      key={task.id}
-                      draggable
-                      onDragStart={() => handleDragStart(task)}
-                      className="bg-gradient-to-r from-white to-green-50 border-2 border-green-200 rounded-lg p-4 shadow-sm hover:shadow-md transition-all duration-200 cursor-move group"
-                    >
-                      <div className="flex items-start gap-3">
-                        <input
-                          type="checkbox"
-                          checked={task.completed}
-                          onChange={() => toggleTaskCompletion(task.id)}
-                          className="w-5 h-5 mt-0.5 text-green-600 rounded focus:ring-2 focus:ring-green-500 cursor-pointer"
-                        />
-                        <span className="flex-1 text-gray-500 line-through break-words">
-                          {task.text}
-                        </span>
-                        <button
-                          onClick={() => handleDeleteTask(task.id)}
-                          className="text-red-400 hover:text-red-600 hover:bg-red-50 p-2 rounded-lg transition-all duration-150 opacity-0 group-hover:opacity-100"
-                          aria-label="タスクを削除"
-                        >
-                          <Trash2 size={18} />
-                        </button>
-                      </div>
-                    </div>
+                    <DoneTaskCard key={task.id} task={task} />
                   ))}
                 </div>
               )}
