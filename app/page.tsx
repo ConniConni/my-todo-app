@@ -2,13 +2,21 @@
 
 import { useState } from 'react';
 
+interface Task {
+  id: number;
+  text: string;
+  completed: boolean;
+}
+
 export default function Home() {
-  const [tasks, setTasks] = useState<string[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [inputValue, setInputValue] = useState('');
+  const [nextId, setNextId] = useState(1);
 
   const handleAddTask = () => {
     if (inputValue.trim() !== '') {
-      setTasks([...tasks, inputValue.trim()]);
+      setTasks([...tasks, { id: nextId, text: inputValue.trim(), completed: false }]);
+      setNextId(nextId + 1);
       setInputValue('');
     }
   };
@@ -17,6 +25,12 @@ export default function Home() {
     if (e.key === 'Enter') {
       handleAddTask();
     }
+  };
+
+  const toggleTaskCompletion = (taskId: number) => {
+    setTasks(tasks.map(task =>
+      task.id === taskId ? { ...task, completed: !task.completed } : task
+    ));
   };
 
   return (
@@ -58,12 +72,32 @@ export default function Home() {
               </p>
             ) : (
               <ul className="space-y-2">
-                {tasks.map((task, index) => (
+                {tasks.map((task) => (
                   <li
-                    key={index}
-                    className="p-4 bg-gray-50 border border-gray-200 rounded-lg hover:bg-gray-100 transition-colors duration-150"
+                    key={task.id}
+                    className={`p-4 border rounded-lg transition-all duration-200 ${
+                      task.completed
+                        ? 'bg-gray-100 border-gray-300'
+                        : 'bg-gray-50 border-gray-200 hover:bg-gray-100'
+                    }`}
                   >
-                    <span className="text-gray-800">{task}</span>
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="checkbox"
+                        checked={task.completed}
+                        onChange={() => toggleTaskCompletion(task.id)}
+                        className="w-5 h-5 text-blue-500 rounded focus:ring-2 focus:ring-blue-500 cursor-pointer"
+                      />
+                      <span
+                        className={`flex-1 ${
+                          task.completed
+                            ? 'line-through text-gray-400'
+                            : 'text-gray-800'
+                        }`}
+                      >
+                        {task.text}
+                      </span>
+                    </div>
                   </li>
                 ))}
               </ul>
